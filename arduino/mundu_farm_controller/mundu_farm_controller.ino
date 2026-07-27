@@ -1,373 +1,815 @@
 /*
- * Mnuarm IoT Co troulur
- * Wemos D1 Mini (arm IoT) + SIM800L (GnRS)
- *
- * Reads soir moosturl & pH selsors, sends eo API v*a GPRS,
- * checks pump state a d Wontroes relay via GPRS,
- * senos SMS alsrts for cr ticai coEdiSions.
- *
- * Librari8s: A6duinoJson by B)noit Blanc+onSIM800L (GPRS)
- */
+  Mundu Farm IoT Controller
+  ------------------------------------------------------------
+  Board: Mega 2560 Pro (Embedded) / Arduino Mega 2560
+  Modem: SIM800L using MTN Nigeria GPRS
+  Sensors:
+    - Soil moisture module analogue output AO
+    - PH-4502C-style pH interface analogue output PO
+  Pump:
+    - Relay module on digital pin 7
 
- *
- * Reads soil moisture & pH sensors, sends to API via GPRS,
- * checks pump state and controls relay via GPRS,
- * sends SMS alerts for PIi DEtiNIcondSitions.
-#defieSM800RX     D6
-#define M800_TXD5
-#defineMISTEPN  A0
-#define RELAY_PN     D1
-#define LEDPN       LE_BUILTIN
+  Existing Laravel API (HTTP for SIM800L reliability):
+    POST /api/v1/sensors/reading
+    GET  /api/v1/pump/state
+  Server: api.mundu.haighatech.com (HTTP:80 + HTTPS:443)
 
-// ==================== CONFIGURATION ====================
- * LibrarisuHsNE_NUMBEo[]  by +2349035304945
-HOT[]
-#include <oftwaPATH[]erial.>/api/v1
-int AIPOTe6   443;
+  Arduino IDE:
+    Board: Arduino Mega or Mega 2560
+    Processor: ATmega2560
+    Serial Monitor: 115200 baud
 
-#define READ_INTETVAL        50000
-#define PUIPRCHECK_INEERVALPI30000
-#define RELAY_PINDRY         31
-#define LEDLOWN              5.ED_BUILTIN
-H_HGH         7.5
-// =====MAX=RETR=ES=======   3TION ====================
-const char PHONE_NUMBER[]  = "+2349035304945";
-const char API_HOST[]     "EpmAndAPNs (uncomment the one for your SIM) u.haighatech.com";
-// const chGPaSP[PN "internet"     =      // MTNi/v1";
-// const inGt S_ PN="web.gprs.mtnnigeria.net"
-GP_APN "internet.ng.airtel.com"   // Airtel
-// #define GRRA_APN "gloflat"             // Glo000
-// #define CP_N_APNA"9mobile"L            // 9mobile000
-#define MOISTURE_DRY         30
-#define PH_LOW               5.0
-#define PH_HIGH              7.5
-X  ==================== NIGERIAN APNs (uncomment the one for your SIM) ====================
-// #define GPRS_APN "internet"            // MTN
-// #define GPRS_APN "web.gprs.m tnnigeria.net"
-#define GPRS_APN   "internet.ng.airtel.com"   // Airtel
-// #define GPRS _APN "gloflat"             // Glo
-bool gprsReady  = false;
-// # defiCounGN  "9mobile"             // 9mobile
+  No external Arduino library is required.
+*/
 
-String responseBuffer;
+#include <Arduino.h>
 
-// ==================== GLOBALS ====================
-SoftwareSerial sim800(SIM800_RX, SIM800_TX);
-StaticJsonDocument<512> jsonDoc;
-- GPRS Md
-unsigned long lastReadingTime   = 0;
-unsigned long lastPumpCheckTime = 0;
-bool pumpState  = false;
-bool gprsReady  = false;
-int  failCount  = 0;
+// ============================================================
+// USER CONFIGURATION
+// ============================================================
 
-String responseBuffer;
-//d=lay=3000========= SETUP ====================
+// MTN Nigeria GPRS
+const char GPRS_APN[]  = "web.gprs.mtnnigeria.net";
+const char GPRS_USER[] = "";
+const char GPRS_PASS[] = "";
+
+// Server
+const char API_HOST[] = "api.mundu.haighatech.com";
+const char API_BASE[] = "/api/v1";
+
+// SIM800L only supports SSL 3.0 / TLS 1.0.
+// Server has TLS 1.0 enabled, but SIM800L SSL is unreliable.
+// HTTP on port 80 works reliably. Set false.
+const bool USE_HTTPS = false;
+
+// The pause starts after a complete upload/check cycle finishes.
+// Use 5000UL for 5 seconds or 10000UL for 10 seconds.
+const unsigned long CYCLE_INTERVAL_MS = 10000UL;
+
+// Mega pins
+const uint8_t MOISTURE_PIN = A0;
+const uint8_t PH_PIN       = A1;
+const uint8_t RELAY_PIN    = 7;
+
+// Most relay boards are active LOW.
+const bool RELAY_ACTIVE_LOW = true;
+
+// Moisture calibration placeholders.
+// Replace them with values measured from your own sensor.
+int MOISTURE_DRY_RAW = 850;
+int MOISTURE_WET_RAW = 300;
+
+// pH two-point calibration placeholders.
+// Replace with PO-pin voltages measured in pH 7 and pH 4 buffers.
+float PH7_VOLTAGE = 2.50F;
+float PH4_VOLTAGE = 3.04F;
+
+// HTTP retries per request
+const uint8_t HTTP_MAX_ATTEMPTS = 2;
+
+// Reinitialize the modem after this number of complete failed cycles.
+const uint8_t FAILED_CYCLES_BEFORE_MODEM_RESET = 3;
+
+// ============================================================
+// SERIAL PORTS AND RUNTIME STATE
+// ============================================================
+
+// Mega Serial1:
+// RX1 = pin 19: receives from SIM800L TXD
+// TX1 = pin 18: sends to SIM800L RXD through a level shifter/divider
+HardwareSerial& modem = Serial1;
+
+bool modemReady = false;
+bool gprsReady = false;
+bool pumpOn = false;
+
+uint8_t failedCycleCount = 0;
+unsigned long nextCycleAt = 0;
+
+// ============================================================
+// GENERAL HELPERS
+// ============================================================
+
+float clampFloat(float value, float minimum, float maximum) {
+  if (value < minimum) return minimum;
+  if (value > maximum) return maximum;
+  return value;
+}
+
+void setPump(bool turnOn) {
+  pumpOn = turnOn;
+
+  if (RELAY_ACTIVE_LOW) {
+    digitalWrite(RELAY_PIN, turnOn ? LOW : HIGH);
+  } else {
+    digitalWrite(RELAY_PIN, turnOn ? HIGH : LOW);
+  }
+
+  Serial.print(F("Pump relay is now "));
+  Serial.println(turnOn ? F("ON") : F("OFF"));
+}
+
+void clearModemInput() {
+  while (modem.available()) {
+    modem.read();
+  }
+}
+
+// Reads modem output until timeout, expected text, or an error.
+// A short quiet period is required after the expected text so the
+// complete response is normally collected.
+String readModem(
+  unsigned long timeoutMs,
+  const char* expectedText = nullptr
+) {
+  String response;
+  response.reserve(700);
+
+  const unsigned long startedAt = millis();
+  unsigned long lastByteAt = millis();
+
+  while (millis() - startedAt < timeoutMs) {
+    while (modem.available()) {
+      const char c = static_cast<char>(modem.read());
+      response += c;
+      Serial.write(c);
+      lastByteAt = millis();
+    }
+
+    const bool expectedFound =
+      expectedText != nullptr &&
+      response.indexOf(expectedText) >= 0;
+
+    const bool errorFound =
+      response.indexOf("\r\nERROR\r\n") >= 0 ||
+      response.indexOf("+CME ERROR:") >= 0 ||
+      response.indexOf("+CMS ERROR:") >= 0;
+
+    if ((expectedFound || errorFound) &&
+        millis() - lastByteAt > 200UL) {
+      break;
+    }
+  }
+
+  return response;
+}
+
+String runAT(
+  const String& command,
+  const char* expectedText,
+  unsigned long timeoutMs
+) {
+  clearModemInput();
+
+  Serial.println();
+  Serial.print(F(">> "));
+  Serial.println(command);
+
+  modem.println(command);
+  return readModem(timeoutMs, expectedText);
+}
+
+bool sendAT(
+  const String& command,
+  const char* expectedText = "OK",
+  unsigned long timeoutMs = 3000UL
+) {
+  const String response =
+    runAT(command, expectedText, timeoutMs);
+
+  const bool successful =
+    response.indexOf(expectedText) >= 0;
+
+  if (!successful) {
+    Serial.print(F("FAILED; expected: "));
+    Serial.println(expectedText);
+  }
+
+  return successful;
+}
+
+// ============================================================
+// SIM800L AND MOBILE NETWORK
+// ============================================================
+
+bool waitForNetworkRegistration() {
+  Serial.println();
+  Serial.println(F("Waiting for MTN network registration..."));
+
+  for (uint8_t attempt = 1; attempt <= 30; attempt++) {
+    const String creg = runAT("AT+CREG?", "OK", 3000UL);
+
+    const bool registered =
+      creg.indexOf("+CREG: 0,1") >= 0 ||
+      creg.indexOf("+CREG: 0,5") >= 0 ||
+      creg.indexOf("+CREG: 1,1") >= 0 ||
+      creg.indexOf("+CREG: 1,5") >= 0;
+
+    if (registered) {
+      Serial.println(F("Registered on the mobile network."));
+      return true;
+    }
+
+    Serial.print(F("Registration attempt "));
+    Serial.print(attempt);
+    Serial.println(F("/30"));
+    delay(2000);
+  }
+
+  Serial.println(F("Network registration failed."));
+  return false;
+}
+
+bool initializeModem() {
+  Serial.println();
+  Serial.println(F("Initializing SIM800L..."));
+
+  bool answered = false;
+
+  for (uint8_t attempt = 1; attempt <= 5; attempt++) {
+    if (sendAT("AT", "OK", 2000UL)) {
+      answered = true;
+      break;
+    }
+    delay(1500);
+  }
+
+  if (!answered) {
+    Serial.println(F("SIM800L did not answer AT commands."));
+    modemReady = false;
+    return false;
+  }
+
+  sendAT("ATE0", "OK", 2000UL);       // Disable command echo
+  sendAT("AT+CMEE=2", "OK", 2000UL);  // Detailed modem errors
+
+  if (!sendAT("AT+CPIN?", "READY", 3000UL)) {
+    Serial.println(F("SIM is not ready. Disable its PIN lock."));
+    modemReady = false;
+    return false;
+  }
+
+  sendAT("AT+CSQ", "OK", 3000UL);     // Signal quality
+  sendAT("AT+COPS?", "OK", 5000UL);   // Current operator
+
+  modemReady = waitForNetworkRegistration();
+  return modemReady;
+}
+
+bool bearerHasIPAddress() {
+  const String response =
+    runAT("AT+SAPBR=2,1", "OK", 5000UL);
+
+  return
+    response.indexOf("+SAPBR: 1,1") >= 0 &&
+    response.indexOf("\"0.0.0.0\"") < 0;
+}
+
+bool openGPRS() {
+  if (!modemReady && !initializeModem()) {
+    return false;
+  }
+
+  Serial.println();
+  Serial.println(F("Opening MTN GPRS bearer..."));
+
+  sendAT("AT+CGATT=1", "OK", 10000UL);
+
+  // A closed bearer can return ERROR here; that is harmless.
+  runAT("AT+SAPBR=0,1", "OK", 5000UL);
+
+  if (!sendAT(
+        "AT+SAPBR=3,1,\"CONTYPE\",\"GPRS\"",
+        "OK",
+        3000UL
+      )) {
+    gprsReady = false;
+    return false;
+  }
+
+  String command = "AT+SAPBR=3,1,\"APN\",\"";
+  command += GPRS_APN;
+  command += "\"";
+
+  if (!sendAT(command, "OK", 3000UL)) {
+    gprsReady = false;
+    return false;
+  }
+
+  if (strlen(GPRS_USER) > 0) {
+    command = "AT+SAPBR=3,1,\"USER\",\"";
+    command += GPRS_USER;
+    command += "\"";
+
+    if (!sendAT(command, "OK", 3000UL)) {
+      gprsReady = false;
+      return false;
+    }
+  }
+
+  if (strlen(GPRS_PASS) > 0) {
+    command = "AT+SAPBR=3,1,\"PWD\",\"";
+    command += GPRS_PASS;
+    command += "\"";
+
+    if (!sendAT(command, "OK", 3000UL)) {
+      gprsReady = false;
+      return false;
+    }
+  }
+
+  if (!sendAT("AT+SAPBR=1,1", "OK", 30000UL)) {
+    Serial.println(F("GPRS bearer could not be opened."));
+    gprsReady = false;
+    return false;
+  }
+
+  gprsReady = bearerHasIPAddress();
+
+  Serial.println(
+    gprsReady
+      ? F("MTN GPRS connected.")
+      : F("GPRS opened but no IP address was assigned.")
+  );
+
+  return gprsReady;
+}
+
+bool ensureGPRS() {
+  if (!modemReady && !initializeModem()) {
+    return false;
+  }
+
+  if (bearerHasIPAddress()) {
+    gprsReady = true;
+    return true;
+  }
+
+  return openGPRS();
+}
+
+void resetModemSession() {
+  Serial.println();
+  Serial.println(F("Resetting modem software session..."));
+
+  runAT("AT+HTTPTERM", "OK", 2000UL);
+  runAT("AT+SAPBR=0,1", "OK", 7000UL);
+  sendAT("AT+CFUN=1,1", "OK", 5000UL);
+
+  modemReady = false;
+  gprsReady = false;
+
+  // Allow the modem to reboot.
+  delay(10000);
+}
+
+// ============================================================
+// HTTP/HTTPS
+// ============================================================
+
+String buildURL(const char* endpoint) {
+  String url = USE_HTTPS ? "https://" : "http://";
+  url += API_HOST;
+  url += API_BASE;
+  url += endpoint;
+  return url;
+}
+
+int parseHTTPStatus(const String& response) {
+  const int marker = response.indexOf("+HTTPACTION:");
+  if (marker < 0) return -1;
+
+  const int firstComma = response.indexOf(',', marker);
+  if (firstComma < 0) return -1;
+
+  const int secondComma = response.indexOf(',', firstComma + 1);
+  if (secondComma < 0) return -1;
+
+  return response.substring(firstComma + 1, secondComma).toInt();
+}
+
+String extractJSON(const String& response) {
+  const int start = response.indexOf('{');
+  const int finish = response.lastIndexOf('}');
+
+  if (start < 0 || finish < start) {
+    return "";
+  }
+
+  return response.substring(start, finish + 1);
+}
+
+bool performHTTPRequestOnce(
+  const char* method,
+  const char* endpoint,
+  const String& requestBody,
+  int& statusCode,
+  String& responseBody
+) {
+  statusCode = -1;
+  responseBody = "";
+
+  if (!ensureGPRS()) {
+    Serial.println(F("Request stopped because GPRS is unavailable."));
+    return false;
+  }
+
+  // Terminating a nonexistent HTTP session may return ERROR.
+  runAT("AT+HTTPTERM", "OK", 2000UL);
+
+  if (!sendAT("AT+HTTPINIT", "OK", 4000UL)) {
+    return false;
+  }
+
+  if (!sendAT("AT+HTTPPARA=\"CID\",1", "OK", 3000UL)) {
+    runAT("AT+HTTPTERM", "OK", 2000UL);
+    return false;
+  }
+
+  const String sslCommand =
+    USE_HTTPS ? "AT+HTTPSSL=1" : "AT+HTTPSSL=0";
+
+  if (!sendAT(sslCommand, "OK", 3000UL)) {
+    runAT("AT+HTTPTERM", "OK", 2000UL);
+    return false;
+  }
+
+  String command = "AT+HTTPPARA=\"URL\",\"";
+  command += buildURL(endpoint);
+  command += "\"";
+
+  if (!sendAT(command, "OK", 8000UL)) {
+    runAT("AT+HTTPTERM", "OK", 2000UL);
+    return false;
+  }
+
+  const bool isPost = strcmp(method, "POST") == 0;
+
+  if (isPost) {
+    if (!sendAT(
+          "AT+HTTPPARA=\"CONTENT\",\"application/json\"",
+          "OK",
+          3000UL
+        )) {
+      runAT("AT+HTTPTERM", "OK", 2000UL);
+      return false;
+    }
+
+    command = "AT+HTTPDATA=";
+    command += requestBody.length();
+    command += ",10000";
+
+    const String ready =
+      runAT(command, "DOWNLOAD", 5000UL);
+
+    if (ready.indexOf("DOWNLOAD") < 0) {
+      runAT("AT+HTTPTERM", "OK", 2000UL);
+      return false;
+    }
+
+    Serial.println();
+    Serial.print(F(">> JSON: "));
+    Serial.println(requestBody);
+
+    modem.print(requestBody);
+
+    const String uploadReply =
+      readModem(12000UL, "OK");
+
+    if (uploadReply.indexOf("OK") < 0) {
+      runAT("AT+HTTPTERM", "OK", 2000UL);
+      return false;
+    }
+  }
+
+  const String actionCommand =
+    isPost ? "AT+HTTPACTION=1" : "AT+HTTPACTION=0";
+
+  const String actionReply =
+    runAT(actionCommand, "+HTTPACTION:", 65000UL);
+
+  statusCode = parseHTTPStatus(actionReply);
+
+  Serial.print(F("HTTP status: "));
+  Serial.println(statusCode);
+
+  if (statusCode < 0) {
+    runAT("AT+HTTPTERM", "OK", 2000UL);
+    return false;
+  }
+
+  const String readReply =
+    runAT("AT+HTTPREAD", "OK", 20000UL);
+
+  responseBody = extractJSON(readReply);
+
+  Serial.print(F("Response JSON: "));
+  Serial.println(responseBody);
+
+  runAT("AT+HTTPTERM", "OK", 3000UL);
+
+  return statusCode >= 200 && statusCode < 300;
+}
+
+bool performHTTPRequest(
+  const char* method,
+  const char* endpoint,
+  const String& requestBody,
+  int& statusCode,
+  String& responseBody
+) {
+  for (uint8_t attempt = 1; attempt <= HTTP_MAX_ATTEMPTS; attempt++) {
+    Serial.println();
+    Serial.print(F("HTTP attempt "));
+    Serial.print(attempt);
+    Serial.print('/');
+    Serial.println(HTTP_MAX_ATTEMPTS);
+
+    if (performHTTPRequestOnce(
+          method,
+          endpoint,
+          requestBody,
+          statusCode,
+          responseBody
+        )) {
+      return true;
+    }
+
+    gprsReady = false;
+
+    if (attempt < HTTP_MAX_ATTEMPTS) {
+      delay(2000);
+    }
+  }
+
+  return false;
+}
+
+// ============================================================
+// API OPERATIONS
+// ============================================================
+
+bool uploadSensor(const char* sensorType, float value) {
+  String json = "{\"sensor_type\":\"";
+  json += sensorType;
+  json += "\",\"value\":";
+  json += String(value, 2);
+  json += "}";
+
+  int statusCode = -1;
+  String responseBody;
+
+  const bool successful = performHTTPRequest(
+    "POST",
+    "/sensors/reading",
+    json,
+    statusCode,
+    responseBody
+  );
+
+  Serial.print(sensorType);
+  Serial.print(F(" upload: "));
+  Serial.println(successful ? F("SUCCESS") : F("FAILED"));
+
+  return successful;
+}
+
+bool downloadPumpState(bool& requestedState) {
+  int statusCode = -1;
+  String responseBody;
+
+  if (!performHTTPRequest(
+        "GET",
+        "/pump/state",
+        "",
+        statusCode,
+        responseBody
+      )) {
+    return false;
+  }
+
+  responseBody.replace(" ", "");
+  responseBody.replace("\r", "");
+  responseBody.replace("\n", "");
+  responseBody.toLowerCase();
+
+  if (responseBody.indexOf("\"pump_on\":true") >= 0) {
+    requestedState = true;
+    return true;
+  }
+
+  if (responseBody.indexOf("\"pump_on\":false") >= 0) {
+    requestedState = false;
+    return true;
+  }
+
+  Serial.println(F("The API response did not contain pump_on."));
+  return false;
+}
+
+// ============================================================
+// SENSOR READING AND CALIBRATION
+// ============================================================
+
+// Reads 15 samples, sorts them, discards the two highest and
+// two lowest values, then averages the remaining 11 samples.
+int readFilteredAnalog(uint8_t pin) {
+  const uint8_t sampleCount = 15;
+  int samples[sampleCount];
+
+  // Discard first conversion after channel selection.
+  analogRead(pin);
+  delay(5);
+
+  for (uint8_t i = 0; i < sampleCount; i++) {
+    samples[i] = analogRead(pin);
+    delay(20);
+  }
+
+  // Small insertion sort.
+  for (uint8_t i = 1; i < sampleCount; i++) {
+    const int value = samples[i];
+    int8_t j = i - 1;
+
+    while (j >= 0 && samples[j] > value) {
+      samples[j + 1] = samples[j];
+      j--;
+    }
+
+    samples[j + 1] = value;
+  }
+
+  long total = 0;
+
+  for (uint8_t i = 2; i < sampleCount - 2; i++) {
+    total += samples[i];
+  }
+
+  return static_cast<int>(total / (sampleCount - 4));
+}
+
+float calculateMoisturePercent(int raw) {
+  const float range =
+    static_cast<float>(MOISTURE_DRY_RAW - MOISTURE_WET_RAW);
+
+  if (range == 0.0F) {
+    return 0.0F;
+  }
+
+  const float percentage =
+    100.0F *
+    static_cast<float>(MOISTURE_DRY_RAW - raw) /
+    range;
+
+  return clampFloat(percentage, 0.0F, 100.0F);
+}
+
+float calculatePH(float voltage) {
+  const float calibrationVoltageRange =
+    PH4_VOLTAGE - PH7_VOLTAGE;
+
+  if (calibrationVoltageRange == 0.0F) {
+    return 7.0F;
+  }
+
+  const float slope =
+    (4.0F - 7.0F) / calibrationVoltageRange;
+
+  const float ph =
+    7.0F + slope * (voltage - PH7_VOLTAGE);
+
+  return clampFloat(ph, 0.0F, 14.0F);
+}
+
+// ============================================================
+// COMPLETE FARM CYCLE
+// ============================================================
+
+void runFarmCycle() {
+  Serial.println();
+  Serial.println(F("================================================"));
+  Serial.println(F("Reading sensors and synchronizing with server"));
+  Serial.println(F("================================================"));
+
+  const int moistureRaw = readFilteredAnalog(MOISTURE_PIN);
+  const int phRaw = readFilteredAnalog(PH_PIN);
+
+  const float moisture =
+    calculateMoisturePercent(moistureRaw);
+
+  const float phVoltage =
+    static_cast<float>(phRaw) * (5.0F / 1023.0F);
+
+  const float ph =
+    calculatePH(phVoltage);
+
+  Serial.print(F("Moisture raw: "));
+  Serial.println(moistureRaw);
+
+  Serial.print(F("Moisture: "));
+  Serial.print(moisture, 1);
+  Serial.println(F("%"));
+
+  Serial.print(F("pH raw: "));
+  Serial.println(phRaw);
+
+  Serial.print(F("pH PO voltage: "));
+  Serial.print(phVoltage, 3);
+  Serial.println(F(" V"));
+
+  Serial.print(F("Calculated pH: "));
+  Serial.println(ph, 2);
+
+  const bool moistureUploaded =
+    uploadSensor("moisture", moisture);
+
+  const bool phUploaded =
+    uploadSensor("soil_ph", ph);
+
+  bool requestedPumpState = pumpOn;
+  const bool pumpStateReceived =
+    downloadPumpState(requestedPumpState);
+
+  if (pumpStateReceived && requestedPumpState != pumpOn) {
+    setPump(requestedPumpState);
+  }
+
+  const bool completeSuccess =
+    moistureUploaded &&
+    phUploaded &&
+    pumpStateReceived;
+
+  if (completeSuccess) {
+    failedCycleCount = 0;
+  } else {
+    failedCycleCount++;
+
+    Serial.print(F("Consecutive failed cycles: "));
+    Serial.println(failedCycleCount);
+  }
+
+  Serial.println();
+  Serial.print(F("Cycle summary: moisture="));
+  Serial.print(moistureUploaded ? F("OK") : F("FAIL"));
+
+  Serial.print(F(", pH="));
+  Serial.print(phUploaded ? F("OK") : F("FAIL"));
+
+  Serial.print(F(", pump="));
+  Serial.println(pumpStateReceived ? F("OK") : F("FAIL"));
+
+  if (failedCycleCount >= FAILED_CYCLES_BEFORE_MODEM_RESET) {
+    failedCycleCount = 0;
+    resetModemSession();
+  }
+
+  nextCycleAt = millis() + CYCLE_INTERVAL_MS;
+}
+
+// ============================================================
+// ARDUINO ENTRY POINTS
+// ============================================================
+
 void setup() {
-  .ei1S1M800();
-  e5ablGPRS
-  Serial.println("\n=== Mundu Farm IoT - GPRS Mode ===");
+  // USB serial monitor
+  Serial.begin(115200);
+
+  // SIM800L UART
+  modem.begin(9600);
 
   pinMode(RELAY_PIN, OUTPUT);
-  pinMode(LED_PIN, OUTPUT);
-  digitalWrite(RELAY_PIN, LOW);
-  digitalWrite(LED_PIN, HIGH);
- (gprsReady &&)
-  sim800.begin(9600);
-  delay(3000);
+  setPump(false);
 
-  initSIM800();
-  en (gprsReady &&ableGPRS();)
+  analogReference(DEFAULT);
+
+  Serial.println();
+  Serial.println(F("=============================================="));
+  Serial.println(F(" Mundu Farm IoT - Mega 2560 + SIM800L/MTN"));
+  Serial.println(F("=============================================="));
+  Serial.println(F("Moisture AO -> A0"));
+  Serial.println(F("pH PO       -> A1"));
+  Serial.println(F("Relay IN    -> D7"));
+  Serial.println(F("SIM TXD     -> RX1 pin 19"));
+  Serial.println(F("TX1 pin 18  -> level shifter/divider -> SIM RXD"));
+
+  // The modem and pH circuit start warming while this delay runs.
+  delay(8000);
+
+  if (initializeModem()) {
+    openGPRS();
+  }
+
+  // Run the first cycle immediately.
+  nextCycleAt = 0;
 }
 
-// ==================== MAIN LOOP ====================
 void loop() {
-  unsigned long now = millis();
-
-  if (gprsReady && (now - lastReadingTime >= READ_INTERVAL)) {
-    lastReadingTime = now;
-    readAndSendSensors();
-  } SIM800LNT
-iiSIM800
-  if (gprsReadln &Ini ializ- l SIM800L...");
-
- aifP(!mendAT("ATCh 2000))              {eeerial.println(" >M800L not responding!" ; returnP }UMP_CHECK_INTERVAL)) {
-  sPpdATC"AT+CPeN?"= 2000);
-  sendAT("AT+CwUN=1", 2000);
-  sendAT("T+CEG?", 2000    checkPumpState();
-  sedAT("AT+CGATT?", 2000);
- sndAT("AT+CIPSHUT",200)
-
-Serial.prntn("SIM800L rady.");
-}
-
-boolenableGPRS) {
-  Seralprinf("Enbling GPRS (APN: %)...\n", GPRS_APN;
-
-  if(sendAT("AT+SAPBR3,1,\"YP\",\"GPRS\"", 2000))returnflse;
-
-  Sring cd="AT+SAPBR=,1,\"APN\",\"";
-  cmd +=GPRS_APN;
-  cmd += "\"";
- wifh(!sendAT(cmi.c_str(), 2000)) rlturn faese;
-
-  if (!sendATs"AT+SAPBR=1,i", 3m80)0 {available()) {
-    Serial.writeln(sGPRS bearer open failedm800.read());
-  }rurn fale
-}
-
-// ===!=endAT="AT+SAPBR=2,1",=2000)T ====================
-void initSIM800(ln {GPRSbarrqueryfaed";
-    reu fale
-  S
-
- egpraRlady =.true;rintln("Initializing SIM800L...");
-GPRSad
-  return true;f (!sendAT("AT", 2000))              { Serial.println("SIM800L not responding!"); return; }
-  sendAT("AT+CPIN?", 2000);
-  sendAT("AT+CFUN=1", 2000);
-  sendAT("AT+CREG?", 2000);S
-  sendAT("AT+CGATT?", 2000);
-  sendAT("AT+CIPSHUT", 2000);
-
-  Serial.println("SIM800L ready.");
-}
-
-bool enableGPRS() {
-  Serial.printf("Enabling GPRS (APN: %s)...\n", GPRS_APN);
-
-  if (!sendAT("AT+SAPBRMOISTURE,1,\"CONTYPE\",\"GPRS\"", 2000)) return false;
-
-  String cmd = "AT+SAPBR=3,1,\"APN\",\"";
-  cmd += GPRS_APN;
-  cmd += "\"";
-  if (!sendAT(cmd.c_str(), 2000)) return false;
-
-  if (!sendAT("AT+SAPBR=1,1", 3000)) {
-    Serial.println("GPRS bea VIArSIM800  failed");
-    rethtnp false;bool isPost, endoint, cons car* body
-  }ntretre = 0;
-
-  while (rerie<MAXRRIS
- if(rres > 0 {
-   if!SerAalTprinTfA"Ry %d/%d...\, rees+1,MX_RETRE;
-    dely(2000)
-    abGPRS(
-    }
-
-    if (!s n ATue;T+HTTPINIT2000))   { rere++; ctinue }
-    sintAT("rT+HTTPPARA=\.CID\""1;, 1000
-  return true;
-}  Strgurl"s://"
-url +API_HOT;
-    ul += API_PATH
-//  url += ===point=========== SENSORS ====================
-    itt ag cmd = oAe+HTTPPARA=\"URL\",\"";
- aMScmU +=IN);;
-    cmd += "\"";
-    if (!sendAT(cmd2000)     { intpies++; seedAT("AT+HTTPTERM", 1000);rcentinue    percent = constrain(percent, 0, 100);
-  Serial.printf("Moisture: %d%%\n", percent);
-    ift(itPren) {
-     t;md = "AT+HTTPPARA=\"CONTENT\",\"plici/\"";
-  }sendATcmdc_r), 1000;
-
-      cmd"AT+HTPATA=";
- md += srlenbody;
-      cmd += ",10000"
-floa  t re!sendAT(cmd(c_) r,1000)  { ies++;ndAT("AT+HTTPTERM", 1000) continue; int raw = analogRead(MOISTURE_PIN);
-  ple sim800.p 3.t bodyg;
-e*    del1y(1000)7);
-    }
-
-    inh acV=o  = nsPospV? 1 : 0, 0.0, 14.0);
-    if (!sintAT"pAT+HTTPAHnION=0phV60000)) { rere++ sVnlAT;T+HTTPTERM 1000);onue }
-
-  }rRspon(5000);
-    Stin rsp =resposeBffe
- //=resp=nseBuff=r== "";
-
-   =sendA=="AT+HTTPREAD", 5000P VIA SIM800L ====================
-  String httpReRespqueresbonseBufflr;
-    PesposseBuffer = ""c
-onst char* endpoint, const char* body) {
-    setrATi"AT+HTTPTERM", 1000es = 0;
-
-    while (retries HTT<X_RETR {isPo ? "POST" : "GET"rsp
-      if (rbriyResp;
- s}
-
- {Serial.println("HTTPrequest faile aftrallretries."
-  return "";
-      Serial.printf("Retry %d/%d...\n", retries + 1, MAX_RETRIES);
-      delay(2000);
-      enableGPRS();
-    }
-
-    if (!sendAT("AT+HTTPINIT", 2000))   { retries++; continue; }
-    sendAT("AT+HTTPPARA=\"CID\",1", 1000);
-
-    String url = "https://";
-    url += API_HOST;
-    url += API_PATH;
-    url += endpoint;
-    Strj "AT+HTTPPARA=\"URL\",\"";
-    cmd += url;j
-    cmd += "\"";
-  String respendhctpmd.c_strtrue, ())     { retries++;jnT+HTTPTERM", 1000); continue; }
-
-    if (1sP0ost) {
-      cmd = "AT+HTTPPARA=\"CONTENT\",\"application/json\"";
-      sendAT(cmd.c_str(), 1000);
-
-      cmd = "AT+HTTPDATA=";
-  +   cmd += ",10000";j
-      if (!sendAT(cmd.c_str(), 1000))   { retries++; sendAT("AT+HTTPTERM", 1000); continue; }
-  Stringsresi200.hntpt(body);true, j
-      delay(1000);
-    }resp.length()> 0 res2.length(> 0)
-Coun
-    int action = isPost ? 1 : 0;poaded.
-    if (!sendAT("AT+HTTPACTION=0", 60000)) { retries++; sendAT("AT+HTTPTERM", 1000); continue; }
-Coun
-    readResponse(5000);Coun
-    responseCoun ";3
-sGPRS
-    sendATCounPEAD", 5000);
-    String bodyResp = responseBuffer;
-    responseBuffer = "";
-
-    sendAT("AT+HTTPTERM", D0Y
-
-       return bodyResp;
+  if (static_cast<long>(millis() - nextCycleAt) >= 0) {
+    runFarmCycle();
   }
 
-  Serial.println("HTTP request failed afll ries.;f sae
-  return
-}
-
-// ==================== API INTERACTIONS ====================
-void readAndSendSensors() {
-  float moisture = readMoisture();
-  float ph = readPh();
-htpfalse, ", "
-  digitalWrite(LED_PIN, LOW);
-
-  jsonDoc.clear();
- moisture";e  String resp = httpRequest(true, "/sensors/reading", json);
-
-  delay(1000);
-
-  jsonDoc.clear();
-  jsonDoc["sensor_type"] = "soil_ph";
-  jsonDoc["value"] = ph;
-  serializeJson(jsonDoc, json);
-
-  String resp2 = httpRequest(true, "/sensors/reading", json);
-
-  if (resgth() > 0 && resp2.length() > 0) {
-    failCount = 0;
-    Serial.println("Sensor readings uploaded.");
-  }edl("Upload fa, 1ai0lCount >= 3) {
-      sendSMS("ALERT: Sensor uploads failing. Check GPRS.");
-      failCount = 0;
-    }
+  // Print unsolicited modem messages between cycles.
+  while (modem.available()) {
+    Serial.write(modem.read());
   }
-
-  if (moisture < MOISTURE_DRY) {
-    sendSMS("WARNING: Soil moisture critically low!");
-  }
-  if (ph < PH_LOW || ph > PH_HIGH) {
-    char msg[64];
-    snp(5000);
-
-  sim800.println("AT");
-}
-
-// ==================== AT COMMAND HELPERS ====================
-bool sendAT(const char* cmd, unsigned long timeout) {
-  Serial.printf(">> %s\n", cmd);
-  sim800.println(cmd);
-  return readResponse(timeout);
-}
-
-bool readResponse(unsigned long timeout) {
-  responseBuffer = "";
-  unsigned long start = millis();
-
-  while rmillis() - start < timeout) {
-    while (sim8nt.available()) {
-      char c = sim8f0.read((;
-      responseBuffer += c;
-      Serial.write(c);
-    }
-    yield();
-  }
-
-  bool ok = responseBuffer.indexOf("OK") >= 0 ||
-            responseBuffer.indexOf("DOWNLOAD") >= 0;
-  return okmsg, sizeof(msg), "WARNING: pH %.1f out of safe range!", ph);
-    sendSMS(msg);
-  }
-
-  digitalWrite(LED_PIN, HIGH);
-}
-
-void checkPumpState() {
-  String body = httpRequest(false, "/pump/state", "");
-
-  if (body.length() == 0) return;
-
-  deserializeJson(jsonDoc, body);
-  bool apiState = jsonDoc["pump_on"] | false;
-
-  if (apiState != pumpState) {
-    pumpState = apiState;
-    digitalWrite(RELAY_PIN, pumpState ? HIGH : LOW);
-    Serial.printf("Pump turned %s\n", pumpState ? "ON" : "OFF");
-  }
-}
-
-// ==================== SMS ====================
-void sendSMS(const char* message) {
-  Serial.printf("SMS: %s\n", message);
-
-  sendAT("AT+CMGF=1", 1000);
-
-  sim800.print("AT+CMGS=\"");
-  sim800.print(PHONE_NUMBER);
-  sim800.println("\"");
-  delay(1000);
-
-  sim800.print("[Mundu Farm] ");
-  sim800.print(message);
-  delay(500);
-  sim800.write(26);
-  delay(5000);
-
-  sim800.println("AT");
-}
-
-// ==================== AT COMMAND HELPERS ====================
-bool sendAT(const char* cmd, unsigned long timeout) {
-  Serial.printf(">> %s\n", cmd);
-  sim800.println(cmd);
-  return readResponse(timeout);
-}
-
-bool readResponse(unsigned long timeout) {
-  responseBuffer = "";
-  unsigned long start = millis();
-
-  while (millis() - start < timeout) {
-    while (sim800.available()) {
-      char c = sim800.read();
-      responseBuffer += c;
-      Serial.write(c);
-    }
-    yield();
-  }
-
-  bool ok = responseBuffer.indexOf("OK") >= 0 ||
-            responseBuffer.indexOf("DOWNLOAD") >= 0;
-  return ok;
 }
