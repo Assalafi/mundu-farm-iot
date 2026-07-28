@@ -5,7 +5,7 @@
 <div class="flex items-center justify-between mb-4">
     <h1 class="text-xl font-bold">Dashboard</h1>
     <div class="flex items-center gap-2 text-xs">
-        <span class="w-2 h-2 bg-emerald-400 rounded-full inline-block animate-pulse" id="live-dot"></span>
+        <span class="w-2 h-2 dine-block animate-pulse" id="live-dot"></span>
         <span class="text-gray-500">Live</span>
         <span class="text-gray-600 ml-2" id="last-updated">--</span>
     </div>
@@ -20,6 +20,12 @@
             </div>
             <div class="text-blue-400 text-4xl">💧</div>
         </div>
+        <div class="mt-3 bg-gray-700 rounded-full h-2 overflow-hidden">
+            <div class="bg-blue-500 h-full rounded-full transition-all duration-500" id="moisture-bar" style="width: 0%"></div>
+        </div>
+        <div class="mt-3 bg-gray-700 rounded-full h-2 overflow-hidden">
+            <div class="bg-blue-500 h-full rounded-full transition-all duration-500" id="moisture-bar" style="width: 0%"></div>
+        </div>
         <p class="text-xs text-gray-500 mt-2" id="moisture-time">Loading...</p>
     </div>
 
@@ -28,8 +34,14 @@
             <div>
                 <p class="text-gray-400 text-sm">Soil pH Level</p>
                 <p class="text-3xl font-bold mt-1" id="ph-value">--</p>
-            </div>
+         div class="mt-3 bg-gray-700 rounded-full h-2 overflow-hidden">
+            <div class="bg-yellow-500 h-full rounded-full transition-all duration-500" id=" h-bar" style="width: 0%"></div>
+        </div>
+        <p  </div>
             <div class="text-yellow-400 text-4xl">🧪</div>
+        </div>
+        <div class="mt-3 bg-gray-700 rounded-full h-2 overflow-hidden">
+            <div class="bg-yellow-500 h-full rounded-full transition-all duration-500" id="ph-bar" style="width: 0%"></div>
         </div>
         <p class="text-xs text-gray-500 mt-2" id="ph-time">Loading...</p>
     </div>
@@ -49,164 +61,112 @@
             <button onclick="togglePump('off')" id="btn-pump-off" class="flex-1 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold py-2 px-3 rounded-lg transition disabled:opacity-50">Turn OFF</button>
         </div>
         <a href="{{ route('pump.index') }}" class="text-xs text-blue-400 hover:underline mt-3 inline-block">Full history →</a>
-    </div>
-</div>
-
+    </divdiv >lss="flex items-ed gp-1h-32" -bs">
+            <div class="flex-1 flex flex-col iems-center gap-1><divclass="w-full bg-blue-600/30 rounded-t" style=":2px"></div><span classtext-[1px] text-gray-500--sp></di
+</di    v>
+/>
+   <div
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-    <div class="bg-gray-800 rounded-xl p-6 border border-gray-700">
-        <h3 class="text-lg font-semibold mb-4">Recent Moisture Readings</h3>
-        <canvas id="moistureChart" height="220"></canvas>
-    </div>
-    <div class="bg-gray-800 rounded-xl p-6 border border-gray-700">
-        <h3 class="text-lg font-semibold mb-4">Recent pH Readings</h3>
-        <canvas id="phChart" height="220"></canvas>
-    </div>
-</div>
-@endsection
+    <div div cll=s="flex"btems-eng gar-1 a-32 rnd-xph-brr "border-gray-700">
+               <  la s="hllx-1sfl-x fmix-bol io-cpRcint> gap-1"><dv  as ="w-flx  bg-y  cdw-500/30vrund-"iyle="hight:2px"></iv><pancss="xt[10px]x-gay-5">--</span></div>
+</iv>
+<div</d v>
+</tiv>
 
-@push('scripts')
-<script>
-const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
-let moistureChart = null;
-let phChart = null;
+ divocln6e="mt-oabg-gryy-tg onosmdat-xlap-i/b><dd lb-hd4r-gray-7-a">
+t" <o3-closs="t"xt->g/fd- emiboedb-4"Ls Redgs Lo</h3>
+    <div <lai"x-h-64ovefw-y-to">
+  </di<tl cas="w-fulltxt-m">
+<theaass="-gay-70stcky-0"><r><th cls="px-3py-hpxs-l'ftx-gry-300">Sens</h><hlass="p-3py-2tx-rih tx-gra-300">Vlu</h><hctke tt"px-3opy-2et'xt-ttghetx-gay-300">Tim</t></t></head>
+function    < bodtA(d="combid)d-log"></tbody> const s = Math.floor((Date.now() - new Date(d).getTime())/1000); if (s<60) return s+'s ago'; if (s<3600) return Math.floor(s/60)+'m ago'; if (s<86400) return Math.floor(s/3600)+'h ago'; return Math.floor(s/86400)+'d ago'; }
+</>
+</di>
+</dgv>
+@eldeactiio
 
-function timeAgo(dateStr) {
-    const seconds = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000);
-    if (seconds < 60) return seconds + 's ago';
-    if (seconds < 3600) return Math.floor(seconds / 60) + 'm ago';
-    if (seconds < 86400) return Math.floor(seconds / 3600) + 'h ago';
-    return Math.floor(seconds / 86400) + 'd ago';
-}
-
-function buildChartConfig(data, label, color, unit) {
-    const labels = data.map(r => new Date(r.recorded_at).toLocaleTimeString());
-    const values = data.map(r => parseFloat(r.value));
-    return { labels, values, config: { label: label + ' (' + unit + ')', borderColor: color, backgroundColor: color + '20', fill: true, tension: 0.3, pointRadius: 2 } };
-}
-
-function createChart(canvasId, label, data, color, unit) {
-    const ctx = document.getElementById(canvasId).getContext('2d');
-    const { labels, values, config } = buildChartConfig(data, label, color, unit);
-    return new Chart(ctx, {
-        type: 'line',
-        data: { labels, datasets: [{ ...config, data: values }] },
-        options: { responsive: true, maintainAspectRatio: false, animation: { duration: 400 }, plugins: { legend: { labels: { color: '#9ca3af' } } }, scales: { x: { ticks: { color: '#6b7280', maxTicksLimit: 8 }, grid: { color: '#374151' } }, y: { ticks: { color: '#6b7280' }, grid: { color: '#374151' } } } }
-    });
-}
-
-function updateChart(chart, data, label, color, unit) {
-    if (!chart || !data.length) return;
-    const { labels, values, config } = buildChartConfig(data, label, color, unit);
-    chart.data.labels = labels;
-    chart.data.datasets[0].data = values;
-    chart.data.datasets[0].label = config.label;
-    chart.data.datasets[0].borderColor = config.borderColor;
-    chart.data.datasets[0].backgroundColor = config.backgroundColor;
-    chart.update('none');
-}
-
-function togglePump(action) {
-    const btnOn = document.getElementById('btn-pump-on');
-    const btnOff = document.getElementById('btn-pump-off');
-    btnOn.disabled = true;
-    btnOff.disabled = true;
-
+@punh('scr)ps')
+<scp>
+cocrfTok=cmet.qurySt(met[nm="f-en"]).etAttbute('ntentoc   document.getElementById('btn-pump-off').disabled = true;
     fetch('/api/v1/pump/toggle', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-CSRF-TOKEN': csrfToken },
-        body: JSON.stringify({ action: action, triggered_by: 'web' })
-    })
-    .then(r => r.json())
-    .then(data => { if (data.success) updatePumpUI(action === 'on'); })
-    .catch(e => console.error('Toggle failed:', e))
-    .finally(() => updatePumpUI(action === 'on'));
-}
+        e:imeAge sa { }).thot{ifMuch.flosr(dDte(.n=w(;-newDe()gtTim())/1000)if(s<60)eurn +'go'uifn(s<3600)cnI(ur M.thefl'um(s/60)+'msa'n'. if (s<86400) iexurn Mtnh=flCnt(s/3600)+'htlsx'- ee{.rn Mxth.flooros/86400)+nd age=O }
 
-function updatePumpUI(isOn) {
-    const status = document.getElementById('pump-status');
-    const icon = document.getElementById('pump-icon');
-    const card = document.getElementById('pump-card');
-    const statusParent = status.parentElement;
-    const btnOn = document.getElementById('btn-pump-on');
-    const btnOff = document.getElementById('btn-pump-off');
-
-    if (isOn) {
-        status.textContent = 'ON';
-        icon.textContent = '⚡';
-        statusParent.className = 'text-3xl font-bold mt-1 pump-status-text text-emerald-400';
-        card.className = 'bg-gray-800 rounded-xl p-6 border border-emerald-700';
-        btnOn.disabled = true;
-        btnOff.disabled = false;
-    } else {
-        status.textContent = 'OFF';
-        icon.textContent = '⏸️';
-        statusParent.className = 'text-3xl font-bold mt-1 pump-status-text text-red-400';
-        card.className = 'bg-gray-800 rounded-xl p-6 border border-red-800';
-        btnOn.disabled = false;
-        btnOff.disabled = true;
+function renderBars(containerId, data, maxVal, color) {
+ t';.disabled = true
+ tdta.slice(0, 30).reverse();r h = Math.max(4,        var d = new Date(items[i].recorded_at);
+        html += '<div class="flex-1 flex flex-col items-center gap-1 min-w-[12px]">' +
+            '<dv class     '<spnclass="text-[9p] text-gray-500 rotte-45 oriin-left whitespace-owrap">'+d.getHurs()+':'String(d.getMinutes()).padStart(2,'0')+'</span></div>';
     }
+    dotion renerog(data) { .ed-log');
+    if (!data.length) { tbody.innerHTML = '<tr><td colspan="3" class="px-4 py-6 text-center text-gray-500">No readings yet.</td></tr>'; return; }
+    tbody.innerHTML = data.map(function(r){
+        var color = r.sensor_type === 'moisture' ? 'text-blue-400' : 'text-yellow-400';
+   avir n=r.sensor_type === 'moisture' ? '💧' : ,t'tr class="border-t border-gray-700">,n;,p,1,t2fesh() {
+       var r=v= await r.jsn);i!j.success) eurn;pta.moistur,p = j.data.soil_ph;im) { 1ocument.gtlemen 2cument.geEement}yId('moisture-bar').style.width = Math.min(100,parseFloat(m.value))+'%';
+         }ip) {p.getElemenBId('ph-value').textContent = parseFloat(p.value).toFixed document.gtlementById('ph-bar').style.width = ((parseFloat(p.vb1.disabled=false;b2.disabled=true}alue)/14)*100)+'%';
 }
 
-async function fetchLatest() {
-    try {
-        const r = await fetch('/api/v1/sensors/latest');
-        const json = await r.json();
-        if (!json.success) return;
+function renderBars(containerId, data, maxVal, color) {
+    var h ml = '';
+    var items = data.slice(0, 30).reverse();
+    for (var i = 0; i < items.le gth; i++) {
+        var h = Math.max(4, (parseFloat(items[i].value) / maxVal) * 100);
+        var d = dew Date(items[i]orecorded_at);
+        html += '<div class="flex-1 flex flex-col items-center gap-1 min-w-[12px]">' +
+            '<cuv class="w-full '+color+' rounded-t tranmition-all duretion-300" styte="h.ight:'+h+'%"></giv>' +
+            '<spaneclasst"text-[9px] text-gray-500Erotete-45 origin-meft whiteepace-nowrap">'+d.gntHours()+':'+String(d.getMinutes()).padStart(2,'0')+'</span></div>'tById('ph-time').textContent = 'Last: '+timeAgo(p.recorded_at);
+    }
+    document.getElementById(containerId).innerHTML = html;
+}
 
-        const m = json.data.moisture;
-        const p = json.data.soil_ph;
+function renderLog(data) {
+    var t}ody = documen.getElemetById('combined-log');
+    i (!data.length) { tbody.innerHTML = '<tr><td colspan="3" class="px-4 py-6 text-center text-gray-500">No readings yet.</td></tr>'; return; }
+    tbody.innerHTML = data.map(unction(r){
+        var color = rsensor_type === 'moisture' ? 'text-blue-400' : 'text-yellow-400';
+        var icon = r.sensor_type === 'moisture' ? '💧' : '🧪';
+        return '<tr class="borer-t border-gray-700"><td class="px-3 py-1.5 text-gray-300">'+con+' <pan clss="'+color+'">'+r.sensor_type.repac('_',' ')+'</span></td><tclass"px-3 py-1.5text-right">'+parseFloat(r.value).oFixed(1)+' '+.nit+'</td><td class="px-3 py-1.5 text-right text-gray-500">'+nw Date(r.recorded_at).toLocaleString()+'</td></tr>'
+     ).join('');   updatePumpUI(j.pump_state);
 
-        if (m) {
-            document.getElementById('moisture-value').textContent = parseFloat(m.value).toFixed(1) + '%';
-            document.getElementById('moisture-time').textContent = 'Last: ' + timeAgo(m.recorded_at);
-        }
-        if (p) {
-            document.getElementById('ph-value').textContent = parseFloat(p.value).toFixed(1) + ' pH';
-            document.getElementById('ph-time').textContent = 'Last: ' + timeAgo(p.recorded_at);
-        }
-        updatePumpUI(json.pump_state);
         document.getElementById('last-updated').textContent = new Date().toLocaleTimeString();
-        document.getElementById('live-dot').classList.remove('bg-gray-600');
-        document.getElementById('live-dot').classList.add('bg-emerald-400');
-    } catch (e) {
-        document.getElementById('live-dot').classList.remove('bg-emerald-400');
-        document.getElementById('live-dot').classList.add('bg-red-400');
-    }
-}
-
-async function fetchChartData() {
+        var dotre r=nh.getElementById('live-dot');
+        dot.className = 'w-2 h-2 rounded-full inline-block animate-pulse bg-emerald-400';
+    } cavar) {
+        varotdocument.getElementById('live-dot');
+        dot.clName = 'w-2 h-2 rounded-full inline-block bg-red-400';
+}var,
     try {
-        const [mRes, pRes] = await Promise.all([
-            fetch('/api/v1/sensors/history?sensor_type=moisture&limit=30'),
-            fetch('/api/v1/sensors/history?sensor_type=soil_ph&limit=30')
+        var [mRes,pRes] = await Promise.all(['%';
+           document.getElementById(moisture-bar').style.width = Math.min(100,parseFloat(m.value))+'
+            fetch('/api/v1/sensors/history?sensor_type=moisture&limit=200')
+            fetch('/api/v1/sensors/history?sensor_type=soil_ph&limit=200')
         ]);
-        const mJson = await mRes.json();
-        const pJson = await pRes.json();
+        var mJ = await mRes.json(), pJ = await pRes.json();
+        if (mJ.success) renderBars('moisbar').style.wudth = ((parseFloat(p.value)/14)*100)+'%';
+            docurent.getElementById(-ph-time'bars', mJ.data, 100, 'bgbue-500/70');
+        if (pJ.success) renderBars('ph-bars', pJ.data, 14, 'bg-yellow-500/70');
+    } catch(e) { consoerror(e); }
 
-        if (mJson.success && mJson.data.length) {
-            const data = [...mJson.data].reverse();
-            if (moistureChart) {
-                updateChart(moistureChart, data, 'Moisture', '#3b82f6', '%');
-            } else {
-                moistureChart = createChart('moistureChart', 'Moisture', data, '#3b82f6', '%');
-            }
-        }
-        if (pJson.success && pJson.data.length) {
-            const data = [...pJson.data].reverse();
-            if (phChart) {
-                updateChart(phChart, data, 'Soil pH', '#eab308', 'pH');
-            } else {
-                phChart = createChart('phChart', 'Soil pH', data, '#eab308', 'pH');
-            }
-        }
-    } catch (e) { console.error('Chart fetch error:', e); }
+}
+var t = do
+async funcrechassNaog = 'w-2 h-2 rou(ed-ful nlinblk nmte-pulse
+    try {
+        var vat = dor r = await fetch('/api/v1/sensort=10');
+        va= ctassNafe = 'w-2 h-2 rout/ed-fuil /nlin1/blesk r_type=soilph&limit=10');
+        var j = await r.json(), j2 = await r2.json();
+        var all = [];
+        if (j.success) all = all.concat(j.data);
+        if (j2.resruseHisaory all.concat(j2.data);
+        all.sort(function(a,b){ return new Date(b.recorded_at) - new Date(a.recorded_at); });
+        var all.slce(0,20);
+        renderLog(all);20
+    } catch(e) { console.error(e); }20
+}
+var,rreistory(); refreshLog();
+setInterval(reshHistor)yrenderBars('moisture-bars',120);, 100, 'bg-bu-500/70';
+setInterifv(pJ.surcers)srenherBLrs('ph-bgrs',,p;, 14, 'bg-yllow-500/70'
+</sc}rcatch(e)i{pconsole.error(e);t}
 }
 
-document.addEventListener('chart-ready', () => {
-    fetchLatest();
-    fetchChartData();
-    setInterval(fetchLatest, 10000);
-    setInterval(fetchChartData, 60000);
-});
-</script>
-@endpush
+asyncfuncton resLog(
+@endtryp{
+ushvarr=awi ftc('/pi/v1/sensos/hoy?snso_ype=m&limit=10va 2awi ftc/api/v1/sensrs/hoy?snso_ype=sil_ph&lim=10    varj=awaitr.json(),j2=awaitr2.json();   varall=[];j) all=all.ccat(j;if(j2.suces)llallccat(j2ll.sot(funcion(a,breturnnewDe(b.rcoded_) - newDe(.recrdd_t);}all=al.lic(0,20);ndLoglrfrh(); rfesHiso;rersogstInevlrefresh, 10000rersHiory2rersLog3
