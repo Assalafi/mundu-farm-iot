@@ -78,15 +78,31 @@ function timeAgo(dateStr) {
     return Math.floor(seconds / 86400) + 'd ago';
 }
 
-function createChart(canvasId, label, data, color, unit) {
-    const ctx = document.getElementById(canvasId).getContext('2d');
+function buildChartConfig(data, label, color, unit) {
     const labels = data.map(r => new Date(r.recorded_at).toLocaleTimeString());
     const values = data.map(r => parseFloat(r.value));
+    return { labels, values, config: { label: label + ' (' + unit + ')', borderColor: color, backgroundColor: color + '20', fill: true, tension: 0.3, pointRadius: 2 } };
+}
+
+function createChart(canvasId, label, data, color, unit) {
+    const ctx = document.getElementById(canvasId).getContext('2d');
+    const { labels, values, config } = buildChartConfig(data, label, color, unit);
     return new Chart(ctx, {
         type: 'line',
-        data: { labels, datasets: [{ label: label + ' (' + unit + ')', data: values, borderColor: color, backgroundColor: color + '20', fill: true, tension: 0.3, pointRadius: 2 }] },
-        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { color: '#9ca3af' } } }, scales: { x: { ticks: { color: '#6b7280', maxTicksLimit: 8 }, grid: { color: '#374151' } }, y: { ticks: { color: '#6b7280' }, grid: { color: '#374151' } } } }
+        data: { labels, datasets: [{ ...config, data: values }] },
+        options: { responsive: true, maintainAspectRatio: false, animation: { duration: 400 }, plugins: { legend: { labels: { color: '#9ca3af' } } }, scales: { x: { ticks: { color: '#6b7280', maxTicksLimit: 8 }, grid: { color: '#374151' } }, y: { ticks: { color: '#6b7280' }, grid: { color: '#374151' } } } }
     });
+}
+
+function updateChart(chart, data, label, color, unit) {
+    if (!chart || !data.length) return;
+    const { labels, values, config } = buildChartConfig(data, label, color, unit);
+    chart.data.labels = labels;
+    chart.data.datasets[0].data = values;
+    chart.data.datasets[0].label = config.label;
+    chart.data.datasets[0].borderColor = config.borderColor;
+    chart.data.datasets[0].backgroundColor = config.backgroundColor;
+    chart.update('none');
 }
 
 function togglePump(action) {
@@ -168,12 +184,20 @@ async function fetchChartData() {
         const pJson = await pRes.json();
 
         if (mJson.success && mJson.data.length) {
-            if (moistureChart) moistureChart.destroy();
-            moistureChart = createChart('moistureChart', 'Moisture', mJson.data.reverse(), '#3b82f6', '%');
+            const data = [...mJson.data].reverse();
+            if (moistureChart) {
+                updateChart(moistureChart, data, 'Moisture', '#3b82f6', '%');
+            } else {
+                moistureChart = createChart('moistureChart', 'Moisture', data, '#3b82f6', '%');
+            }
         }
         if (pJson.success && pJson.data.length) {
-            if (phChart) phChart.destroy();
-            phChart = createChart('phChart', 'Soil pH', pJson.data.reverse(), '#eab308', 'pH');
+            const data = [...pJson.data].reverse();
+            if (phChart) {
+                updateChart(phChart, data, 'Soil pH', '#eab308', 'pH');
+            } else {
+                phChart = createChart('phChart', 'Soil pH', data, '#eab308', 'pH');
+            }
         }
     } catch (e) { console.error('Chart fetch error:', e); }
 }
