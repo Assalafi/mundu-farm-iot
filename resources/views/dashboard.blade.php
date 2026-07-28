@@ -2,42 +2,51 @@
 @section('title', ' - Dashboard')
 
 @section('content')
+<div class="flex items-center justify-between mb-4">
+    <h1 class="text-xl font-bold">Dashboard</h1>
+    <div class="flex items-center gap-2 text-xs">
+        <span class="w-2 h-2 bg-emerald-400 rounded-full inline-block animate-pulse" id="live-dot"></span>
+        <span class="text-gray-500">Live</span>
+        <span class="text-gray-600 ml-2" id="last-updated">--</span>
+    </div>
+</div>
+
 <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
     <div class="bg-gray-800 rounded-xl p-6 border border-gray-700">
         <div class="flex items-center justify-between">
             <div>
                 <p class="text-gray-400 text-sm">Soil Moisture</p>
-                <p class="text-3xl font-bold mt-1" id="moisture-value">{{ $moisture ? $moisture->value . '%' : '--' }}</p>
+                <p class="text-3xl font-bold mt-1" id="moisture-value">--</p>
             </div>
             <div class="text-blue-400 text-4xl">💧</div>
         </div>
-        <p class="text-xs text-gray-500 mt-2" id="moisture-time">{{ $moisture ? 'Last: ' . $moisture->recorded_at->diffForHumans() : 'No data yet' }}</p>
+        <p class="text-xs text-gray-500 mt-2" id="moisture-time">Loading...</p>
     </div>
 
     <div class="bg-gray-800 rounded-xl p-6 border border-gray-700">
         <div class="flex items-center justify-between">
             <div>
                 <p class="text-gray-400 text-sm">Soil pH Level</p>
-                <p class="text-3xl font-bold mt-1" id="ph-value">{{ $ph ? number_format($ph->value, 1) . ' pH' : '--' }}</p>
+                <p class="text-3xl font-bold mt-1" id="ph-value">--</p>
             </div>
             <div class="text-yellow-400 text-4xl">🧪</div>
         </div>
-        <p class="text-xs text-gray-500 mt-2" id="ph-time">{{ $ph ? 'Last: ' . $ph->recorded_at->diffForHumans() : 'No data yet' }}</p>
+        <p class="text-xs text-gray-500 mt-2" id="ph-time">Loading...</p>
     </div>
 
     <div class="bg-gray-800 rounded-xl p-6 border border-gray-700" id="pump-card">
         <div class="flex items-center justify-between">
             <div>
                 <p class="text-gray-400 text-sm">Water Pump</p>
-                <p class="text-3xl font-bold mt-1 pump-status-text {{ $pumpOn ? 'text-emerald-400' : 'text-red-400' }}">
-                    <span id="pump-status">{{ $pumpOn ? 'ON' : 'OFF' }}</span>
+                <p class="text-3xl font-bold mt-1 pump-status-text text-red-400">
+                    <span id="pump-status">--</span>
                 </p>
             </div>
-            <div class="text-4xl" id="pump-icon">{{ $pumpOn ? '⚡' : '⏸️' }}</div>
+            <div class="text-4xl" id="pump-icon">⏸️</div>
         </div>
         <div class="mt-4 flex gap-2">
-            <button onclick="togglePump('on')" id="btn-pump-on" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold py-2 px-3 rounded-lg transition disabled:opacity-50" {{ $pumpOn ? 'disabled' : '' }}>Turn ON</button>
-            <button onclick="togglePump('off')" id="btn-pump-off" class="flex-1 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold py-2 px-3 rounded-lg transition disabled:opacity-50" {{ !$pumpOn ? 'disabled' : '' }}>Turn OFF</button>
+            <button onclick="togglePump('on')" id="btn-pump-on" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold py-2 px-3 rounded-lg transition disabled:opacity-50">Turn ON</button>
+            <button onclick="togglePump('off')" id="btn-pump-off" class="flex-1 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold py-2 px-3 rounded-lg transition disabled:opacity-50">Turn OFF</button>
         </div>
         <a href="{{ route('pump.index') }}" class="text-xs text-blue-400 hover:underline mt-3 inline-block">Full history →</a>
     </div>
@@ -46,11 +55,11 @@
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
     <div class="bg-gray-800 rounded-xl p-6 border border-gray-700">
         <h3 class="text-lg font-semibold mb-4">Recent Moisture Readings</h3>
-        <canvas id="moistureChart" height="200"></canvas>
+        <canvas id="moistureChart" height="220"></canvas>
     </div>
     <div class="bg-gray-800 rounded-xl p-6 border border-gray-700">
         <h3 class="text-lg font-semibold mb-4">Recent pH Readings</h3>
-        <canvas id="phChart" height="200"></canvas>
+        <canvas id="phChart" height="220"></canvas>
     </div>
 </div>
 @endsection
@@ -61,32 +70,22 @@ const csrfToken = document.querySelector('meta[name="csrf-token"]').getAttribute
 let moistureChart = null;
 let phChart = null;
 
+function timeAgo(dateStr) {
+    const seconds = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000);
+    if (seconds < 60) return seconds + 's ago';
+    if (seconds < 3600) return Math.floor(seconds / 60) + 'm ago';
+    if (seconds < 86400) return Math.floor(seconds / 3600) + 'h ago';
+    return Math.floor(seconds / 86400) + 'd ago';
+}
+
 function createChart(canvasId, label, data, color, unit) {
     const ctx = document.getElementById(canvasId).getContext('2d');
-    const labels = [...data].reverse().map(r => new Date(r.recorded_at).toLocaleTimeString());
-    const values = [...data].reverse().map(r => parseFloat(r.value));
+    const labels = data.map(r => new Date(r.recorded_at).toLocaleTimeString());
+    const values = data.map(r => parseFloat(r.value));
     return new Chart(ctx, {
         type: 'line',
-        data: {
-            labels: labels,
-            datasets: [{
-                label: label + ' (' + unit + ')',
-                data: values,
-                borderColor: color,
-                backgroundColor: color + '20',
-                fill: true,
-                tension: 0.3,
-                pointRadius: 2,
-            }]
-        },
-        options: {
-            responsive: true,
-            plugins: { legend: { labels: { color: '#9ca3af' } } },
-            scales: {
-                x: { ticks: { color: '#6b7280' }, grid: { color: '#374151' } },
-                y: { ticks: { color: '#6b7280' }, grid: { color: '#374151' } }
-            }
-        }
+        data: { labels, datasets: [{ label: label + ' (' + unit + ')', data: values, borderColor: color, backgroundColor: color + '20', fill: true, tension: 0.3, pointRadius: 2 }] },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { color: '#9ca3af' } } }, scales: { x: { ticks: { color: '#6b7280', maxTicksLimit: 8 }, grid: { color: '#374151' } }, y: { ticks: { color: '#6b7280' }, grid: { color: '#374151' } } } }
     });
 }
 
@@ -98,50 +97,34 @@ function togglePump(action) {
 
     fetch('/api/v1/pump/toggle', {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Accept': 'application/json',
-            'X-CSRF-TOKEN': csrfToken
-        },
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json', 'X-CSRF-TOKEN': csrfToken },
         body: JSON.stringify({ action: action, triggered_by: 'web' })
     })
     .then(r => r.json())
-    .then(data => {
-        if (data.success) {
-            updatePumpUI(action === 'on');
-        }
-    })
-    .catch(err => console.error('Pump toggle failed:', err))
-    .finally(() => {
-        if (action === 'on') {
-            btnOn.disabled = true;
-            btnOff.disabled = false;
-        } else {
-            btnOn.disabled = false;
-            btnOff.disabled = true;
-        }
-    });
+    .then(data => { if (data.success) updatePumpUI(action === 'on'); })
+    .catch(e => console.error('Toggle failed:', e))
+    .finally(() => updatePumpUI(action === 'on'));
 }
 
 function updatePumpUI(isOn) {
     const status = document.getElementById('pump-status');
     const icon = document.getElementById('pump-icon');
     const card = document.getElementById('pump-card');
-    const statusText = status.parentElement;
+    const statusParent = status.parentElement;
     const btnOn = document.getElementById('btn-pump-on');
     const btnOff = document.getElementById('btn-pump-off');
 
     if (isOn) {
         status.textContent = 'ON';
         icon.textContent = '⚡';
-        statusText.className = 'text-3xl font-bold mt-1 pump-status-text text-emerald-400';
+        statusParent.className = 'text-3xl font-bold mt-1 pump-status-text text-emerald-400';
         card.className = 'bg-gray-800 rounded-xl p-6 border border-emerald-700';
         btnOn.disabled = true;
         btnOff.disabled = false;
     } else {
         status.textContent = 'OFF';
         icon.textContent = '⏸️';
-        statusText.className = 'text-3xl font-bold mt-1 pump-status-text text-red-400';
+        statusParent.className = 'text-3xl font-bold mt-1 pump-status-text text-red-400';
         card.className = 'bg-gray-800 rounded-xl p-6 border border-red-800';
         btnOn.disabled = false;
         btnOff.disabled = true;
@@ -158,49 +141,48 @@ async function fetchLatest() {
         const p = json.data.soil_ph;
 
         if (m) {
-            document.getElementById('moisture-value').textContent = m.value + '%';
-            document.getElementById('moisture-time').textContent = 'Last: ' + new Date(m.recorded_at).toLocaleTimeString();
+            document.getElementById('moisture-value').textContent = parseFloat(m.value).toFixed(1) + '%';
+            document.getElementById('moisture-time').textContent = 'Last: ' + timeAgo(m.recorded_at);
         }
         if (p) {
             document.getElementById('ph-value').textContent = parseFloat(p.value).toFixed(1) + ' pH';
-            document.getElementById('ph-time').textContent = 'Last: ' + new Date(p.recorded_at).toLocaleTimeString();
+            document.getElementById('ph-time').textContent = 'Last: ' + timeAgo(p.recorded_at);
         }
-
         updatePumpUI(json.pump_state);
+        document.getElementById('last-updated').textContent = new Date().toLocaleTimeString();
+        document.getElementById('live-dot').classList.remove('bg-gray-600');
+        document.getElementById('live-dot').classList.add('bg-emerald-400');
     } catch (e) {
-        console.error('Live fetch failed:', e);
+        document.getElementById('live-dot').classList.remove('bg-emerald-400');
+        document.getElementById('live-dot').classList.add('bg-red-400');
     }
 }
 
 async function fetchChartData() {
     try {
         const [mRes, pRes] = await Promise.all([
-            fetch('/api/v1/sensors/history?sensor_type=moisture&limit=20'),
-            fetch('/api/v1/sensors/history?sensor_type=soil_ph&limit=20')
+            fetch('/api/v1/sensors/history?sensor_type=moisture&limit=30'),
+            fetch('/api/v1/sensors/history?sensor_type=soil_ph&limit=30')
         ]);
         const mJson = await mRes.json();
         const pJson = await pRes.json();
 
         if (mJson.success && mJson.data.length) {
             if (moistureChart) moistureChart.destroy();
-            moistureChart = createChart('moistureChart', 'Moisture', mJson.data, '#3b82f6', '%');
+            moistureChart = createChart('moistureChart', 'Moisture', mJson.data.reverse(), '#3b82f6', '%');
         }
         if (pJson.success && pJson.data.length) {
             if (phChart) phChart.destroy();
-            phChart = createChart('phChart', 'Soil pH', pJson.data, '#eab308', 'pH');
+            phChart = createChart('phChart', 'Soil pH', pJson.data.reverse(), '#eab308', 'pH');
         }
-    } catch (e) {
-        console.error('Chart update failed:', e);
-    }
+    } catch (e) { console.error('Chart fetch error:', e); }
 }
 
-const initialMoisture = @json(optional($recentHistory)['moisture'] ?? collect());
-const initialPh = @json(optional($recentHistory)['soil_ph'] ?? collect());
-
-if (initialMoisture.length) moistureChart = createChart('moistureChart', 'Moisture', initialMoisture, '#3b82f6', '%');
-if (initialPh.length) phChart = createChart('phChart', 'Soil pH', initialPh, '#eab308', 'pH');
-
-setInterval(fetchLatest, 5000);
-setInterval(fetchChartData, 30000);
+document.addEventListener('chart-ready', () => {
+    fetchLatest();
+    fetchChartData();
+    setInterval(fetchLatest, 10000);
+    setInterval(fetchChartData, 60000);
+});
 </script>
 @endpush
